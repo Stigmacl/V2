@@ -21,6 +21,19 @@ interface Comment {
   deletionReason?: string;
 }
 
+interface DeletedComment {
+  id: string;
+  newsId: string;
+  newsTitle: string;
+  content: string;
+  author: string;
+  authorAvatar: string;
+  createdAt: string;
+  deletedBy: string;
+  deletedAt: string;
+  deletionReason: string;
+}
+
 interface NewsItem {
   id: string;
   title: string;
@@ -90,8 +103,9 @@ interface AuthContextType {
   likeNews: (newsId: string) => void;
   addComment: (newsId: string, content: string) => void;
   incrementNewsViews: (newsId: string) => void;
-  deleteComment: (newsId: string, commentId: string, reason?: string) => void;
-  restoreComment: (newsId: string, commentId: string) => void;
+  deleteComment: (newsId: string, commentId: string, reason?: string) => Promise<boolean>;
+  restoreComment: (newsId: string, commentId: string) => Promise<boolean>;
+  getDeletedComments: () => Promise<DeletedComment[]>;
   clans: Clan[];
   createClan: (clanData: Omit<Clan, 'id' | 'members' | 'createdAt'>) => Promise<boolean>;
   updateClan: (clanId: string, updates: Partial<Clan>) => Promise<boolean>;
@@ -687,6 +701,72 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
+  const deleteComment = async (newsId: string, commentId: string, reason?: string): Promise<boolean> => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/news/delete-comment.php`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ commentId, reason })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        await loadNews();
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Delete comment error:', error);
+      return false;
+    }
+  };
+
+  const restoreComment = async (newsId: string, commentId: string): Promise<boolean> => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/news/restore-comment.php`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ commentId })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        await loadNews();
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Restore comment error:', error);
+      return false;
+    }
+  };
+
+  const getDeletedComments = async (): Promise<DeletedComment[]> => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/news/get-deleted-comments.php`, {
+        credentials: 'include'
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        return data.deletedComments;
+      }
+      return [];
+    } catch (error) {
+      console.error('Get deleted comments error:', error);
+      return [];
+    }
+  };
+
   const getConversation = (userId1: string, userId2: string): Message[] => {
     return messages
       .filter(msg => 
@@ -716,14 +796,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setMessages(prev => prev.map(msg => 
       msg.id === messageId ? { ...msg, isRead: true } : msg
     ));
-  };
-
-  const deleteComment = (newsId: string, commentId: string, reason?: string) => {
-    console.log('Delete comment:', newsId, commentId, reason);
-  };
-
-  const restoreComment = (newsId: string, commentId: string) => {
-    console.log('Restore comment:', newsId, commentId);
   };
 
   if (isLoading) {
@@ -765,6 +837,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       incrementNewsViews,
       deleteComment,
       restoreComment,
+      getDeletedComments,
       clans,
       createClan,
       updateClan,

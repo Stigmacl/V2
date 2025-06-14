@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Settings, Users, FileText, Shield, Image, Edit, Trash2, Plus, Save, X, Upload, Eye, UserCheck, UserX, Key, Ban, CheckCircle, AlertTriangle, Calendar, Clock } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Settings, Users, FileText, Shield, Image, Edit, Trash2, Plus, Save, X, Upload, Eye, UserCheck, UserX, Key, Ban, CheckCircle, AlertTriangle, Calendar, Clock, RotateCcw, MessageCircle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 const Admin: React.FC = () => {
@@ -17,10 +17,12 @@ const Admin: React.FC = () => {
     clans,
     createClan,
     updateClan,
-    deleteClan
+    deleteClan,
+    getDeletedComments,
+    restoreComment
   } = useAuth();
   
-  const [activeTab, setActiveTab] = useState<'news' | 'users' | 'clans'>('users');
+  const [activeTab, setActiveTab] = useState<'news' | 'users' | 'clans' | 'moderation'>('users');
   const [isEditing, setIsEditing] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -28,6 +30,7 @@ const Admin: React.FC = () => {
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [userFilter, setUserFilter] = useState<'all' | 'active' | 'suspended' | 'admin' | 'player'>('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [deletedComments, setDeletedComments] = useState<any[]>([]);
 
   // Check if user is admin
   if (!user || user.role !== 'admin') {
@@ -41,6 +44,18 @@ const Admin: React.FC = () => {
       </div>
     );
   }
+
+  // Load deleted comments when moderation tab is active
+  useEffect(() => {
+    if (activeTab === 'moderation') {
+      loadDeletedComments();
+    }
+  }, [activeTab]);
+
+  const loadDeletedComments = async () => {
+    const comments = await getDeletedComments();
+    setDeletedComments(comments);
+  };
 
   // Filter users based on search and filter criteria
   const filteredUsers = users.filter(u => {
@@ -177,6 +192,15 @@ const Admin: React.FC = () => {
     }
   };
 
+  const handleRestoreComment = async (commentId: string) => {
+    const success = await restoreComment('', commentId);
+    if (success) {
+      loadDeletedComments(); // Reload deleted comments
+    } else {
+      alert('Error al restaurar el comentario');
+    }
+  };
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -226,7 +250,8 @@ const Admin: React.FC = () => {
   const tabs = [
     { id: 'users' as const, label: 'Gestión de Usuarios', icon: Users },
     { id: 'news' as const, label: 'Gestión de Noticias', icon: FileText },
-    { id: 'clans' as const, label: 'Sistema de Clanes', icon: Shield }
+    { id: 'clans' as const, label: 'Sistema de Clanes', icon: Shield },
+    { id: 'moderation' as const, label: 'Moderación', icon: MessageCircle }
   ];
 
   return (
@@ -513,6 +538,7 @@ const Admin: React.FC = () => {
                         <div className="flex items-center space-x-4 text-xs text-blue-400">
                           <span>Por: {item.author}</span>
                           <span>Fecha: {item.date}</span>
+                          <span>Comentarios: {item.comments.filter(c => !c.isDeleted).length}</span>
                         </div>
                       </div>
                     </div>
@@ -613,6 +639,79 @@ const Admin: React.FC = () => {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Moderation Panel */}
+      {activeTab === 'moderation' && (
+        <div className="space-y-6">
+          <div className="flex justify-between items-center">
+            <h2 className="text-2xl font-bold text-white">Panel de Moderación</h2>
+            <button 
+              onClick={loadDeletedComments}
+              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-medium transition-colors"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Actualizar</span>
+            </button>
+          </div>
+
+          <div className="bg-slate-800/40 backdrop-blur-lg rounded-xl border border-blue-700/30 p-6">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center space-x-2">
+              <MessageCircle className="w-5 h-5 text-red-400" />
+              <span>Comentarios Eliminados ({deletedComments.length})</span>
+            </h3>
+
+            {deletedComments.length === 0 ? (
+              <div className="text-center py-8">
+                <MessageCircle className="w-12 h-12 text-blue-400 mx-auto mb-3 opacity-50" />
+                <p className="text-blue-300">No hay comentarios eliminados</p>
+                <p className="text-blue-400 text-sm mt-1">Los comentarios moderados aparecerán aquí</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {deletedComments.map((comment) => (
+                  <div key={comment.id} className="bg-red-500/10 border border-red-500/30 rounded-xl p-4">
+                    <div className="flex items-start justify-between">
+                      <div className="flex space-x-3 flex-1">
+                        <img
+                          src={comment.authorAvatar}
+                          alt={comment.author}
+                          className="w-10 h-10 rounded-full border border-red-500/30 opacity-75"
+                        />
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2 mb-2">
+                            <span className="font-medium text-red-300">{comment.author}</span>
+                            <span className="text-xs bg-red-500/20 text-red-300 px-2 py-1 rounded">ELIMINADO</span>
+                            <span className="text-xs text-red-400">{formatDate(comment.createdAt)}</span>
+                          </div>
+                          
+                          <p className="text-red-200 mb-2">{comment.content}</p>
+                          
+                          <div className="text-xs text-red-400 space-y-1">
+                            <p><strong>Noticia:</strong> {comment.newsTitle}</p>
+                            <p><strong>Eliminado por:</strong> {comment.deletedBy}</p>
+                            <p><strong>Fecha eliminación:</strong> {formatDate(comment.deletedAt)}</p>
+                            {comment.deletionReason && (
+                              <p><strong>Razón:</strong> {comment.deletionReason}</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <button
+                        onClick={() => handleRestoreComment(comment.id)}
+                        className="p-2 bg-green-600/20 hover:bg-green-600/40 rounded-lg text-green-300 transition-colors"
+                        title="Restaurar comentario"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

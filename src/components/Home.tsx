@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, MessageCircle, Heart, Share2, Pin, Eye, User } from 'lucide-react';
+import { Calendar, MessageCircle, Heart, Share2, Pin, Eye, User, Trash2, RotateCcw, AlertTriangle, Shield } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 const Home: React.FC = () => {
-  const { news, user, likeNews, addComment, incrementNewsViews } = useAuth();
+  const { news, user, likeNews, addComment, incrementNewsViews, deleteComment, restoreComment } = useAuth();
   const [selectedNews, setSelectedNews] = useState<string | null>(null);
   const [newComment, setNewComment] = useState('');
   const [viewedNews, setViewedNews] = useState<Set<string>>(new Set());
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [commentToDelete, setCommentToDelete] = useState<{ newsId: string; commentId: string; author: string } | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('es-CL', {
@@ -48,6 +51,36 @@ const Home: React.FC = () => {
       // Fallback: copy to clipboard
       navigator.clipboard.writeText(`${newsItem.title}\n\n${newsItem.content}\n\n${window.location.href}`);
       alert('Enlace copiado al portapapeles');
+    }
+  };
+
+  const handleDeleteComment = (newsId: string, commentId: string, author: string) => {
+    setCommentToDelete({ newsId, commentId, author });
+    setShowDeleteModal(true);
+  };
+
+  const confirmDeleteComment = async () => {
+    if (!commentToDelete) return;
+    
+    const success = await deleteComment(
+      commentToDelete.newsId, 
+      commentToDelete.commentId, 
+      deleteReason || 'Moderación administrativa'
+    );
+    
+    if (success) {
+      setShowDeleteModal(false);
+      setCommentToDelete(null);
+      setDeleteReason('');
+    } else {
+      alert('Error al eliminar el comentario');
+    }
+  };
+
+  const handleRestoreComment = async (newsId: string, commentId: string) => {
+    const success = await restoreComment(newsId, commentId);
+    if (!success) {
+      alert('Error al restaurar el comentario');
     }
   };
 
@@ -179,7 +212,7 @@ const Home: React.FC = () => {
                             className="flex items-center space-x-2 px-4 py-2 bg-blue-500/20 hover:bg-blue-500/30 rounded-lg transition-colors text-blue-300 hover:text-blue-200"
                           >
                             <MessageCircle className="w-4 h-4" />
-                            <span>{item.comments.length}</span>
+                            <span>{item.comments.filter(c => !c.isDeleted).length}</span>
                           </button>
                           
                           <button 
@@ -195,33 +228,93 @@ const Home: React.FC = () => {
                       {selectedNews === item.id && (
                         <div className="mt-6 border-t border-blue-700/30 pt-6">
                           <h4 className="text-lg font-semibold text-white mb-4">
-                            Comentarios ({item.comments.length})
+                            Comentarios ({item.comments.filter(c => !c.isDeleted).length})
                           </h4>
                           
                           <div className="space-y-4 mb-6">
-                            {item.comments.length === 0 ? (
+                            {item.comments.filter(c => !c.isDeleted).length === 0 ? (
                               <div className="text-center py-6">
                                 <MessageCircle className="w-8 h-8 text-blue-400 mx-auto mb-2 opacity-50" />
                                 <p className="text-blue-400">No hay comentarios aún</p>
                                 <p className="text-blue-500 text-sm">¡Sé el primero en comentar!</p>
                               </div>
                             ) : (
-                              item.comments.map((comment) => (
-                                <div key={comment.id} className="flex space-x-3">
-                                  <img
-                                    src={comment.avatar}
-                                    alt={comment.author}
-                                    className="w-8 h-8 rounded-full border border-blue-500/30"
-                                  />
-                                  <div className="flex-1 bg-slate-700/40 rounded-lg p-3">
-                                    <div className="flex items-center space-x-2 mb-1">
-                                      <span className="font-medium text-blue-300">{comment.author}</span>
-                                      <span className="text-xs text-blue-400">{formatDate(comment.date)}</span>
+                              item.comments
+                                .filter(c => !c.isDeleted)
+                                .map((comment) => (
+                                  <div key={comment.id} className="flex space-x-3">
+                                    <img
+                                      src={comment.avatar}
+                                      alt={comment.author}
+                                      className="w-8 h-8 rounded-full border border-blue-500/30"
+                                    />
+                                    <div className="flex-1 bg-slate-700/40 rounded-lg p-3">
+                                      <div className="flex items-center justify-between mb-1">
+                                        <div className="flex items-center space-x-2">
+                                          <span className="font-medium text-blue-300">{comment.author}</span>
+                                          <span className="text-xs text-blue-400">{formatDate(comment.date)}</span>
+                                        </div>
+                                        
+                                        {user?.role === 'admin' && (
+                                          <div className="flex items-center space-x-1">
+                                            <button
+                                              onClick={() => handleDeleteComment(item.id, comment.id, comment.author)}
+                                              className="p-1 hover:bg-red-500/20 rounded text-red-400 hover:text-red-300 transition-colors"
+                                              title="Eliminar comentario"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                            </button>
+                                          </div>
+                                        )}
+                                      </div>
+                                      <p className="text-blue-100">{comment.content}</p>
                                     </div>
-                                    <p className="text-blue-100">{comment.content}</p>
                                   </div>
-                                </div>
-                              ))
+                                ))
+                            )}
+
+                            {/* Mostrar comentarios eliminados solo a admins */}
+                            {user?.role === 'admin' && item.comments.some(c => c.isDeleted) && (
+                              <div className="border-t border-red-700/30 pt-4">
+                                <h5 className="text-sm font-medium text-red-300 mb-3 flex items-center space-x-2">
+                                  <Shield className="w-4 h-4" />
+                                  <span>Comentarios Eliminados (Solo Admins)</span>
+                                </h5>
+                                {item.comments
+                                  .filter(c => c.isDeleted)
+                                  .map((comment) => (
+                                    <div key={comment.id} className="flex space-x-3 mb-3">
+                                      <img
+                                        src={comment.avatar}
+                                        alt={comment.author}
+                                        className="w-8 h-8 rounded-full border border-red-500/30 opacity-50"
+                                      />
+                                      <div className="flex-1 bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                                        <div className="flex items-center justify-between mb-1">
+                                          <div className="flex items-center space-x-2">
+                                            <span className="font-medium text-red-300">{comment.author}</span>
+                                            <span className="text-xs text-red-400">{formatDate(comment.date)}</span>
+                                            <span className="text-xs bg-red-500/20 text-red-300 px-2 py-1 rounded">ELIMINADO</span>
+                                          </div>
+                                          
+                                          <button
+                                            onClick={() => handleRestoreComment(item.id, comment.id)}
+                                            className="p-1 hover:bg-green-500/20 rounded text-green-400 hover:text-green-300 transition-colors"
+                                            title="Restaurar comentario"
+                                          >
+                                            <RotateCcw className="w-3 h-3" />
+                                          </button>
+                                        </div>
+                                        <p className="text-red-200 opacity-75">{comment.content}</p>
+                                        {comment.deletionReason && (
+                                          <p className="text-xs text-red-400 mt-2 italic">
+                                            Razón: {comment.deletionReason}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                              </div>
                             )}
                           </div>
 
@@ -268,6 +361,60 @@ const Home: React.FC = () => {
                 </article>
               );
             })}
+        </div>
+      )}
+
+      {/* Modal de confirmación para eliminar comentario */}
+      {showDeleteModal && commentToDelete && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-800 rounded-2xl border border-red-500/30 p-6 max-w-md w-full">
+            <div className="flex items-center space-x-3 mb-4">
+              <AlertTriangle className="w-8 h-8 text-red-400" />
+              <div>
+                <h3 className="text-lg font-bold text-white">Eliminar Comentario</h3>
+                <p className="text-red-300 text-sm">Esta acción se puede revertir</p>
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <p className="text-blue-200 mb-4">
+                ¿Estás seguro de que quieres eliminar el comentario de <strong>{commentToDelete.author}</strong>?
+              </p>
+              
+              <div>
+                <label className="block text-blue-300 text-sm font-medium mb-2">
+                  Razón de eliminación (opcional)
+                </label>
+                <textarea
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  placeholder="Ej: Contenido inapropiado, spam, etc."
+                  rows={3}
+                  className="w-full px-3 py-2 bg-slate-700/40 border border-blue-600/30 rounded-lg text-white placeholder-blue-300 focus:outline-none focus:border-blue-500 transition-colors resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={confirmDeleteComment}
+                className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 rounded-xl text-white font-medium transition-colors"
+              >
+                Eliminar Comentario
+              </button>
+              
+              <button
+                onClick={() => {
+                  setShowDeleteModal(false);
+                  setCommentToDelete(null);
+                  setDeleteReason('');
+                }}
+                className="px-6 py-3 bg-slate-600 hover:bg-slate-700 rounded-xl text-white font-medium transition-colors"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
