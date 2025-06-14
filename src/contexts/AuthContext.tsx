@@ -59,12 +59,20 @@ interface Clan {
   createdAt: string;
 }
 
+interface SessionInfo {
+  isActive: boolean;
+  expiresAt: number;
+  lastExtended: number;
+}
+
 interface AuthContextType {
   user: User | null;
   isLoggedIn: boolean;
+  sessionInfo: SessionInfo;
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => void;
   register: (username: string, email: string, password: string) => Promise<boolean>;
+  extendSession: () => Promise<boolean>;
   users: User[];
   updateUser: (userId: string, updates: Partial<User>) => Promise<boolean>;
   changeUserPassword: (userId: string, newPassword: string) => boolean;
@@ -125,6 +133,11 @@ const getApiBaseUrl = () => {
 
 const API_BASE_URL = getApiBaseUrl();
 
+// Constantes de sesión
+const SESSION_DURATION = 20 * 60 * 1000; // 20 minutos en milisegundos
+const AUTO_EXTEND_INTERVAL = 15 * 60 * 1000; // Auto-extender cada 15 minutos
+const SESSION_WARNING_TIME = 5 * 60 * 1000; // Advertir 5 minutos antes de expirar
+
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
@@ -132,11 +145,124 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [clans, setClans] = useState<Clan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [sessionInfo, setSessionInfo] = useState<SessionInfo>({
+    isActive: false,
+    expiresAt: 0,
+    lastExtended: 0
+  });
 
-  // Cargar datos iniciales
+  // Referencias para los timers
+  const autoExtendTimer = React.useRef<NodeJS.Timeout | null>(null);
+  const sessionCheckTimer = React.useRef<NodeJS.Timeout | null>(null);
+
+  // Verificar sesión al cargar la página
   useEffect(() => {
-    loadInitialData();
+    checkExistingSession();
   }, []);
+
+  // Auto-extender sesión y verificar estado
+  useEffect(() => {
+    if (user && sessionInfo.isActive) {
+      startSessionTimers();
+    } else {
+      clearSessionTimers();
+    }
+
+    return () => clearSessionTimers();
+  }, [user, sessionInfo.isActive]);
+
+  const checkExistingSession = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/check-session.php`, {
+        credentials: 'include'
+      });
+      
+      const data = await response.json();
+      
+      if (data.success && data.user) {
+        setUser(data.user);
+        updateSessionInfo(data.sessionTime);
+        await loadInitialData();
+      }
+    } catch (error) {
+      console.error('Error checking session:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const updateSessionInfo = (sessionTime?: number) => {
+    const now = sessionTime ? sessionTime * 1000 : Date.now();
+    setSessionInfo({
+      isActive: true,
+      expiresAt: now + SESSION_DURATION,
+      lastExtended: now
+    });
+  };
+
+  const startSessionTimers = () => {
+    clearSessionTimers();
+
+    // Auto-extender cada 15 minutos
+    autoExtendTimer.current = setInterval(async () => {
+      if (user) {
+        await extendSession();
+      }
+    }, AUTO_EXTEND_INTERVAL);
+
+    // Verificar estado de sesión cada minuto
+    sessionCheckTimer.current = setInterval(() => {
+      if (sessionInfo.isActive) {
+        const timeLeft = sessionInfo.expiresAt - Date.now();
+        
+        // Si quedan menos de 5 minutos, mostrar advertencia
+        if (timeLeft <= SESSION_WARNING_TIME && timeLeft > 0) {
+          const minutesLeft = Math.ceil(timeLeft / 60000);
+          console.warn(`⚠️ Tu sesión expirará en ${minutesLeft} minuto(s)`);
+        }
+        
+        // Si la sesión expiró, cerrar sesión
+        if (timeLeft <= 0) {
+          console.warn('🔒 Sesión expirada');
+          logout();
+        }
+      }
+    }, 60000); // Cada minuto
+  };
+
+  const clearSessionTimers = () => {
+    if (autoExtendTimer.current) {
+      clearInterval(autoExtendTimer.current);
+      autoExtendTimer.current = null;
+    }
+    if (sessionCheckTimer.current) {
+      clearInterval(sessionCheckTimer.current);
+      sessionCheckTimer.current = null;
+    }
+  };
+
+  const extendSession = async (): Promise<boolean> => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/extend-session.php`, {
+        method: 'POST',
+        credentials: 'include'
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        updateSessionInfo(data.sessionTime);
+        console.log('✅ Sesión extendida automáticamente');
+        return true;
+      } else {
+        console.warn('❌ No se pudo extender la sesión:', data.message);
+        return false;
+      }
+    } catch (error) {
+      console.error('Error extending session:', error);
+      return false;
+    }
+  };
 
   const loadInitialData = async () => {
     try {
@@ -147,8 +273,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       ]);
     } catch (error) {
       console.error('Error loading initial data:', error);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -212,7 +336,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       if (data.success) {
         setUser(data.user);
-        await loadUsers(); // Recargar usuarios para actualizar estado online
+        updateSessionInfo();
+        await loadInitialData();
+        console.log('✅ Sesión iniciada correctamente');
         return true;
       }
       
@@ -238,7 +364,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       if (data.success) {
         setUser(data.user);
-        await loadUsers(); // Recargar usuarios
+        updateSessionInfo();
+        await loadInitialData();
+        console.log('✅ Usuario registrado y sesión iniciada');
         return true;
       }
       
@@ -255,12 +383,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         method: 'POST',
         credentials: 'include'
       });
-      
-      setUser(null);
-      await loadUsers(); // Recargar usuarios para actualizar estado offline
     } catch (error) {
       console.error('Logout error:', error);
+    } finally {
       setUser(null);
+      setSessionInfo({
+        isActive: false,
+        expiresAt: 0,
+        lastExtended: 0
+      });
+      clearSessionTimers();
+      console.log('🔒 Sesión cerrada');
     }
   };
 
@@ -278,7 +411,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        await loadNews(); // Recargar noticias
+        await loadNews();
         return true;
       }
       return false;
@@ -302,7 +435,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        await loadNews(); // Recargar noticias
+        await loadNews();
         return true;
       }
       return false;
@@ -326,7 +459,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        await loadNews(); // Recargar noticias
+        await loadNews();
         return true;
       }
       return false;
@@ -350,7 +483,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        await loadNews(); // Recargar noticias para actualizar likes
+        await loadNews();
       }
     } catch (error) {
       console.error('Like news error:', error);
@@ -371,7 +504,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        await loadNews(); // Recargar noticias para actualizar comentarios
+        await loadNews();
       }
     } catch (error) {
       console.error('Add comment error:', error);
@@ -392,7 +525,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        // Actualizar mensajes localmente o recargar
         const newMessage: Message = {
           id: data.id,
           fromUserId: user!.id,
@@ -422,8 +554,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        await loadUsers(); // Recargar usuarios
-        // Si es el usuario actual, actualizar también el estado local
+        await loadUsers();
         if (userId === user?.id) {
           setUser(prev => prev ? { ...prev, ...updates } : null);
         }
@@ -450,7 +581,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        await loadUsers(); // Recargar usuarios
+        await loadUsers();
         return true;
       }
       return false;
@@ -474,7 +605,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        await loadUsers(); // Recargar usuarios
+        await loadUsers();
         return true;
       }
       return false;
@@ -498,7 +629,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        await loadClans(); // Recargar clanes
+        await loadClans();
         return true;
       }
       return false;
@@ -522,7 +653,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        await Promise.all([loadClans(), loadUsers()]); // Recargar clanes y usuarios
+        await Promise.all([loadClans(), loadUsers()]);
         return true;
       }
       return false;
@@ -546,7 +677,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        await Promise.all([loadClans(), loadUsers()]); // Recargar clanes y usuarios
+        await Promise.all([loadClans(), loadUsers()]);
         return true;
       }
       return false;
@@ -571,32 +702,27 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     ).length;
   };
 
-  // Funciones temporales para compatibilidad (implementar según necesidades)
+  // Funciones temporales para compatibilidad
   const changeUserPassword = (userId: string, newPassword: string): boolean => {
-    // TODO: Implementar API call
     console.log('Change password:', userId);
     return true;
   };
 
   const incrementNewsViews = (newsId: string) => {
-    // TODO: Implementar API call
     console.log('Increment views:', newsId);
   };
 
   const markMessageAsRead = (messageId: string) => {
-    // TODO: Implementar API call
     setMessages(prev => prev.map(msg => 
       msg.id === messageId ? { ...msg, isRead: true } : msg
     ));
   };
 
   const deleteComment = (newsId: string, commentId: string, reason?: string) => {
-    // TODO: Implementar API call
     console.log('Delete comment:', newsId, commentId, reason);
   };
 
   const restoreComment = (newsId: string, commentId: string) => {
-    // TODO: Implementar API call
     console.log('Restore comment:', newsId, commentId);
   };
 
@@ -605,7 +731,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-800 flex items-center justify-center">
         <div className="text-center">
           <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-lg font-medium text-blue-200">Cargando Tactical Ops 3.5...</p>
+          <p className="text-lg font-medium text-blue-200">Verificando sesión...</p>
         </div>
       </div>
     );
@@ -615,9 +741,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     <AuthContext.Provider value={{
       user,
       isLoggedIn: !!user,
+      sessionInfo,
       login,
       logout,
       register,
+      extendSession,
       users,
       updateUser,
       changeUserPassword,

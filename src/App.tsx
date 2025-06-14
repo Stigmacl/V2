@@ -8,6 +8,7 @@ import Players from './components/Players';
 import Contact from './components/Contact';
 import Admin from './components/Admin';
 import UserPanel from './components/UserPanel';
+import SessionManager from './components/SessionManager';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 
@@ -75,6 +76,7 @@ function AppContent() {
       
       <Header />
       <Navigation currentSection={currentSection} onSectionChange={setCurrentSection} />
+      <SessionManager />
       
       <main className="relative z-10 pt-44">
         {renderSection()}
